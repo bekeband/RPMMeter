@@ -1,6 +1,7 @@
 # Object files
 *.o
 *.ko
+*.obj
 
 # Libraries
 *.lib
@@ -16,3 +17,10 @@
 *.exe
 *.out
 *.app
+*.cmf
+*.hex
+*.hxl
+*.lst
+
+build/*.*
+dist/*.*
