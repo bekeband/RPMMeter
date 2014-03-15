@@ -10,6 +10,10 @@
 #include <stdlib.h>
 
 #define F_OSC 18430000l   // quartz frequency
+#define F_ICLK  (F_OSC / 4) // internal clock
+
+#define F_TMR0  (F_ICLK / 256)  // TMR0 timer frequency
+
 
 // CONFIG
 #pragma config FOSC = HS        // Oscillator Selection bits (HS oscillator)
@@ -25,8 +29,11 @@
 #ifdef DEBUG
 #define TIMER_0_COUNT 0             // most slowly TMR0 to debug 
 #else
-#define TIMER_0_COUNT (255 - 45)    // for suppress display flickering
+#define TIMER_0_DIVIDER 45
+#define TIMER_0_COUNT (255 - TIMER_0_DIVIDER)    // for suppress display flickering
 #endif
+
+#define T_RPM_BASE (F_TMR0 / TIMER_0_DIVIDER)
 
 #define BUTTON PORTBbits.RB0
 #define BUTTON_TRIS TRISBbits.TRISB0
@@ -35,8 +42,23 @@
 
 unsigned char BCD_DISPLAY[4] = {0,0,0,0};
 
+typedef enum E_PRG_STATE {
+  meas = 0,
+  input_check = 1
+};
+
+typedef enum E_MEAS_RANGE {
+  s4,
+  s2,
+  s1
+};
+
 int BUTTON_MIRROR, BUTTON_PRESSED;
-int PROGRAM_STATE = 0;
+
+enum E_PRG_STATE PRG_STATE = meas;
+/* In beginning 4 sec measuring time. */
+enum E_MEAS_RANGE MEAS_RANGE = s4;
+
 int RPM_INPUT_MIRROR = 3;
 
 unsigned int display_decimal = 0;
@@ -57,7 +79,7 @@ void interrupt isr(void)
 //        int_counter++;
         INTCONbits.RBIF = 0; /* Clear RB port changed interrupt flag. */
     }
-    else if (PIR1bits.TMR1IF)   // TMR 1 interrupt ?
+    else if (PIR1bits.TMR1IF)   // TMR 1 overflow interrupt we must change measuring range
     {
 /*        int_counter++;
         Timer1OFF();        // Stop TMR1 timer
@@ -68,6 +90,7 @@ void interrupt isr(void)
     else if (INTCONbits.T0IF) /* T0 interrupt we can take the next display
                                * decimale number */
     {
+
 
       /* This is a debug slower cycle.*/
 #ifdef DEBUG
@@ -165,6 +188,8 @@ int main(int, char**){
   T1CONbits.TMR1CS = 1; // input from T1OSI port
   T1CONbits.T1OSCEN = 1;  // Enabled T1 timer (input the T1CKI/RC0 port)
 //  T1CONbits.TMR1ON = 1; // On the T1 timer
+  TMR1H = 0;
+  TMR1L = 0;
   T1CONbits.T1CKPS = 0b00;  //
 
   /* ------------ Global interrupt enabled ----------------------------*/
@@ -174,15 +199,28 @@ int main(int, char**){
   PORTA = 0xFE;
 //  PORTBbits.RB7 = 0;
 
+  int u;
+
   while (1)
   {
     if (BUTTON_PRESSED)
     {
       /* Incremental the program state. */
-      PROGRAM_STATE++;
-      switch (PROGRAM_STATE)
+      PRG_STATE++;
+    };
+    switch (PRG_STATE)
       {
-        case 1:   // input check
+        case meas:   // Normal RPM measuring
+        {
+          T1CONbits.TMR1ON = 1;
+          for (u = 0; u < 1000; u++)
+          {
+
+          }
+          T1CONbits.TMR1ON = 0;
+          
+        } break;
+        case input_check:   // input check
         {
           if (RPM_INPUT != RPM_INPUT_MIRROR)
           {
@@ -199,9 +237,8 @@ int main(int, char**){
           }
         } break;
       }
-      BCD_DISPLAY[0] = PROGRAM_STATE;
+      BCD_DISPLAY[0] = PRG_STATE;
       BUTTON_PRESSED = 0;
-    }
   }
 
 
