@@ -8,11 +8,12 @@
 #include <pic16f873.h>
 #include <stdio.h>
 #include <stdlib.h>
+//#include <math.h>
 
 #define F_OSC 18430000l   // quartz frequency
 #define F_ICLK  (F_OSC / 4) // internal clock
 
-#define F_TMR0  (F_ICLK / 256)  // TMR0 timer frequency
+#define F_TMR0  (F_ICLK / 256)  // TMR0 timer frequency 17998,047
 
 
 // CONFIG
@@ -25,47 +26,116 @@
 #pragma config CPD = OFF        // Data EE Memory Code Protection (Code Protection off)
 #pragma config WRT = ON         // FLASH Program Memory Write Enable (Unprotected program memory may be written to by EECON control)
 
+/* The measuring opto disc slots number (1 round = DSIC_SLOTS impulse.)*/
+#define DISC_SLOTS  60
+
 #define DISPLAY_SHIFT_BEGIN 0b00000001
 #ifdef DEBUG
 #define TIMER_0_COUNT 0             // most slowly TMR0 to debug 
 #else
 #define TIMER_0_DIVIDER 45
-#define TIMER_0_COUNT (255 - TIMER_0_DIVIDER)    // for suppress display flickering
+#define TIMER_0_COUNT (255 - TIMER_0_DIVIDER)    // timer 0 base
 #endif
 
-#define T_RPM_BASE (F_TMR0 / TIMER_0_DIVIDER)
-
+#define T_RPM_BASE (F_TMR0 / TIMER_0_DIVIDER)   /* RPM_BASE and display refresh timer0 interrupt,
+                                                  1/400th sec. exact 399,956 */
 #define BUTTON PORTBbits.RB0
-#define BUTTON_TRIS TRISBbits.TRISB0
+
+#define DP_00 PORTBbits.RB1
+#define DP_01 PORTBbits.RB2
+#define DP_02 PORTBbits.RB3
 
 #define RPM_INPUT PORTCbits.RC0 // for RPM_INPUT port test.
 
+double MEAS_RPM_FACTORS[8] = {0.25, 0.5, 1.0, 2.0};
+//double MEAS_RPS_FACTORS[8] = {0.00417, 0.0084, 0.017, 0.034, 0.067, 0.167, 0.333, 0.667};
+
 unsigned char BCD_DISPLAY[4] = {0,0,0,0};
+unsigned int MEAS_FACTORS[4] = {1600, 800, 400, 200};
+
+
+/* pointer the current meas factor in MEAS_FACTORS table. */
+unsigned int PTR_MEAS_FACTOR = 3;
+
+/* Mirror the counting impulse. (TMR1H,L copy) */
+unsigned int COUNTER_MIRROR;
 
 typedef enum E_PRG_STATE {
   meas = 0,
   input_check = 1
 };
 
-typedef enum E_MEAS_RANGE {
-  s4,
-  s2,
-  s1
-};
+/* Measure status word */
+union {
+  struct
+  {
+    /* Disable the next measuring cycle. */
+    unsigned MEAS_INH: 1;
+    /* Avaliable new counter data in.*/
+    unsigned NEW_DATA: 1;
+    /* RPM, or RPS dimension. */
+    unsigned RPM_RPS: 1;
+  };
+  }MEAS_STATUS;
+
 
 int BUTTON_MIRROR, BUTTON_PRESSED;
 
 enum E_PRG_STATE PRG_STATE = meas;
-/* In beginning 4 sec measuring time. */
-enum E_MEAS_RANGE MEAS_RANGE = s4;
 
+/* Used the RPM counter input check. */
 int RPM_INPUT_MIRROR = 3;
 
+/* MEAS_TIME_FACTOR: factor for measuring process's control.*/
+int MEAS_TIME_FACTOR;
+
+/* TIMER_COUNTER: counter for RPM rime base measuring. */
+int TIMER_COUNTER;
+
+/* Want to change auto range? */
+int IS_AUTO_RANGE = 1;
+
+/* diplya decimal point counter for the time multiplexed showing. */
 unsigned int display_decimal = 0;
 #ifdef DEBUG
 unsigned int bit_flag;
 #endif
-unsigned char PC = 0;
+
+void DisplayOverflow()
+{ int i;
+  for (i =0; i < 4; i++)
+  {
+    BCD_DISPLAY[i] = 12;  // u symbol onto display.
+  }
+}
+
+unsigned char BCD_BUF[4];
+
+void DisplayResult(unsigned int value)
+{ int i; 
+  int res = value;
+  int div;
+  for (i = 0; i < 4; i++)
+  {
+    div = res % 10;
+    res = res / 10;
+    BCD_DISPLAY[3-i] = div;
+  }
+}
+
+/* StartNewMeasure: Starting the TMR1 as counter to measuring the inpulse.
+ */
+
+void StartNewMeasure()
+{
+  MEAS_TIME_FACTOR = MEAS_FACTORS[PTR_MEAS_FACTOR];
+  INTCONbits.GIE = 0;   /* Global interrupt disabled. */
+  TIMER_COUNTER = 0;
+  TMR1L = 0;
+  TMR1H = 0;
+  T1CONbits.TMR1ON = 1;     /* Restart the TMR1 timer */
+  INTCONbits.GIE = 1;   /* Global interrupt enabled. */ 
+}
 
 /******************************************************************************/
 /* General interrupt handler for treats the timer, and counter interrupts     */
@@ -74,23 +144,43 @@ unsigned char PC = 0;
 void interrupt isr(void)
 {
     /* Determine which flag generated the interrupts */
-    if(INTCONbits.RBIF) // If RB port changed ...
+    if(INTCONbits.RBIF) // If RB port changed. Not using now ...
     {
 //        int_counter++;
         INTCONbits.RBIF = 0; /* Clear RB port changed interrupt flag. */
     }
     else if (PIR1bits.TMR1IF)   // TMR 1 overflow interrupt we must change measuring range
     {
-/*        int_counter++;
-        Timer1OFF();        // Stop TMR1 timer
-        LoadTMR1(TMR1_LOAD_DATA);        //reload tmr1
-        Timer1ON();         Then start TMR1 again. */
-        PIR1bits.TMR1IF = 0;  // Clear timer1 interrupt flag
+      T1CONbits.TMR1ON = 0; // Stop the T1 immediately.
+      MEAS_STATUS.NEW_DATA = 0;         //
+      if (IS_AUTO_RANGE)
+      { /* overflow decrease RPM sampling time. */
+//        MEAS_TIME_FACTOR = MEAS_FACTORS[PTR_MEAS_FACTOR];
+      } else
+      {
+        DisplayOverflow();  /* Overflow symbol to display.*/
+      }
+      StartNewMeasure();  // Always we have starting new measuring...
+      PIR1bits.TMR1IF = 0;  // Clear timer1 interrupt flag
     }
-    else if (INTCONbits.T0IF) /* T0 interrupt we can take the next display
-                               * decimale number */
+    else if (PIR1bits.TMR2IF) // TMR 2 the time base for RPM measuring
     {
 
+    }
+    else if (INTCONbits.T0IF) /* T0 interrupt we can take the next display
+                               * decimal number, and the RPM meter time base is
+                               * here too. */
+    {
+    /* Is the measuring time out ?*/
+      if ((TIMER_COUNTER++ == MEAS_TIME_FACTOR) && (!MEAS_STATUS.MEAS_INH))
+      {
+        T1CONbits.TMR1ON = 0;     /* STOP the TMR1 counter */
+        COUNTER_MIRROR = TMR1H << 8;
+        COUNTER_MIRROR |= TMR1L & 0xFF;
+        MEAS_STATUS.NEW_DATA = 1; /* Signal the main program, that avaliable the new
+                                   * RPM data in TMR1. */
+//        StartNewMeasure();
+      };
 
       /* This is a debug slower cycle.*/
 #ifdef DEBUG
@@ -145,6 +235,7 @@ void interrupt isr(void)
     }
 }
 
+/* Not used, only testing purpose.*/
 void wait()
 { int i;
   for (i = 0; i < 10000; i++)
@@ -153,18 +244,35 @@ void wait()
   };
 }
 
+unsigned int CalculateRPM()
+{ 
+  unsigned int result;
+
+  if (PTR_MEAS_FACTOR > 2)
+  {
+    result = COUNTER_MIRROR << (PTR_MEAS_FACTOR - 2);
+  } else
+  {
+    result = COUNTER_MIRROR >> (PTR_MEAS_FACTOR - 2);
+  }
+
+  return result;
+  
+}
+
 /*
  * 
  */
 int main(int, char**){
 
   int i;
-
+  unsigned int RESULT;
+  
   /* ----------------- PORT SETTINGS -----------------------------*/
 
   TRISC = 0b00001111;       // PORTC 4-7 out, 0-3 in
 
-  BUTTON_TRIS = 1;          // button port input
+  TRISB = 0b11110001;
 
   PORTA = 0;
   ADCON1bits.PCFG = 0b0110; // All of PORT A pin are digital.
@@ -186,7 +294,7 @@ int main(int, char**){
   /* --------------------- TMR1 to RPM counter ------------------------*/
 
   T1CONbits.TMR1CS = 1; // input from T1OSI port
-  T1CONbits.T1OSCEN = 1;  // Enabled T1 timer (input the T1CKI/RC0 port)
+  T1CONbits.T1OSCEN = 0;  // Enabled T1 timer (input the T1CKI/RC0 port)
 //  T1CONbits.TMR1ON = 1; // On the T1 timer
   TMR1H = 0;
   TMR1L = 0;
@@ -194,10 +302,15 @@ int main(int, char**){
 
   /* ------------ Global interrupt enabled ----------------------------*/
 
-  INTCONbits.GIE = 1;   // global interrupt enabled
+//  INTCONbits.GIE = 1;   // global interrupt enabled
 
   PORTA = 0xFE;
 //  PORTBbits.RB7 = 0;
+
+  /* Beginning initialize. */
+
+  MEAS_STATUS.MEAS_INH = 0;
+  StartNewMeasure();
 
   int u;
 
@@ -212,14 +325,18 @@ int main(int, char**){
       {
         case meas:   // Normal RPM measuring
         {
-          T1CONbits.TMR1ON = 1;
-          for (u = 0; u < 1000; u++)
-          {
 
-          }
-          T1CONbits.TMR1ON = 0;
+          if (MEAS_STATUS.NEW_DATA) /* Is avaliable new measured data ?*/
+          {
+            RESULT = CalculateRPM();
+            DisplayResult(RESULT);
+            MEAS_STATUS.NEW_DATA = 0; /* The data aquisticun successed, and
+                                       * new data request. */
+            StartNewMeasure();
+          };
           
         } break;
+
         case input_check:   // input check
         {
           if (RPM_INPUT != RPM_INPUT_MIRROR)
@@ -240,20 +357,6 @@ int main(int, char**){
       BCD_DISPLAY[0] = PRG_STATE;
       BUTTON_PRESSED = 0;
   }
-
-
-
-/*  while (1)
-  {
-    PORTA = ~display_shift;
-    wait();
-    display_shift = display_shift << 1;
-    if (segm_no++ == 5)
-    {
-      display_shift = DISPLAY_SHIFT_BEGIN;
-      segm_no = 0;
-    }
-  }*/
 
   return (EXIT_SUCCESS);
 }
