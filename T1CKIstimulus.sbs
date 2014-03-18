@@ -1,0 +1,47 @@
+## SCL Builder Setup File: Do not edit!!
+
+## VERSION: MPLAB X
+## FORMAT:  v2.00.01
+## DEVICE:  PIC16F873
+
+## PINREGACTIONS
+us
+
+0
+--
+&
+## ADVPINREGACTIONS
+--
+&
+--
+COND1
+Any
+
+
+
+0
+cyc
+
+--
+&
+## CLOCK
+RPM_INPUT
+T1CKI
+Always
+Never
+Low
+2300
+2300
+
+--
+&
+## STIMULUSFILE
+&
+## RESPONSEFILE
+&
+## ASYNCH
+&
+## ADVANCEDSCL
+
+1
+&

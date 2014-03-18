@@ -19,9 +19,9 @@
 // CONFIG
 #pragma config FOSC = HS        // Oscillator Selection bits (HS oscillator)
 #pragma config WDTE = OFF       // Watchdog Timer Enable bit (WDT disabled)
-#pragma config PWRTE = ON      // Power-up Timer Enable bit (PWRT disabled)
+#pragma config PWRTE = OFF      // Power-up Timer Enable bit (PWRT disabled)
 #pragma config CP = OFF         // FLASH Program Memory Code Protection bits (Code protection off)
-#pragma config BOREN = ON       // Brown-out Reset Enable bit (BOR enabled)
+#pragma config BOREN = OFF      // Brown-out Reset Enable bit (BOR enabled)
 #pragma config LVP = ON         // Low Voltage In-Circuit Serial Programming Enable bit (RB3/PGM pin has PGM function; low-voltage programming enabled)
 #pragma config CPD = OFF        // Data EE Memory Code Protection (Code Protection off)
 #pragma config WRT = ON         // FLASH Program Memory Write Enable (Unprotected program memory may be written to by EECON control)
@@ -73,7 +73,7 @@ union {
     unsigned MEAS_INH: 1;
     /* Avaliable new counter data in.*/
     unsigned NEW_DATA: 1;
-    /* RPM, or RPS dimension. */
+    /* RPM, or RPS meas dim. */
     unsigned RPM_RPS: 1;
   };
   }MEAS_STATUS;
